@@ -1,0 +1,9 @@
+# Local configuration — contains HF_TOKEN; never commit
+user-values.env
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Claude Code local settings
+.claude/
