@@ -1,6 +1,6 @@
-# rhaiis-vllm-ocp
+# Red Hat AI Inference Server - setup with vLLM on Red Hat OpenShift
 
-Deploy a vLLM OpenAI-compatible inference server on OpenShift using the **Red Hat AI Inference Server (RHAIIS)** image. A single `deploy.sh` script renders all manifests from a local env file and applies them to the cluster. The model is downloaded automatically from Hugging Face Hub on first start and cached on a persistent volume — subsequent restarts skip the download.
+Deploy a vLLM OpenAI-compatible inference server on Red Hat OpenShift using the **Red Hat AI Inference Server (RHAIIS)** image. A single `deploy.sh` script renders all manifests from a local env file and applies them to the cluster. The model is downloaded automatically from *Hugging Face Hub* on first start and cached on a persistent volume — subsequent restarts skip the download.
 
 ---
 
@@ -86,7 +86,7 @@ bash deploy.sh
 ### 3. Watch startup
 
 ```bash
-# Init container — model download (first run only, ~5–10 min depending on bandwidth)
+# Init container — model download (first run only, ~5–10 min depending on bandwidth and model size)
 oc logs -f -l app=vllm -c model-downloader -n vllm-inference
 
 # Server — model load and vLLM startup (~2–3 min)
@@ -96,7 +96,7 @@ oc logs -f deployment/vllm -c server -n vllm-inference
 oc get pods -n vllm-inference -w
 ```
 
-### 4. Test the API
+### 4. Test the API with simple chat request
 
 ```bash
 bash curl.sh
@@ -132,6 +132,8 @@ curl -X POST https://vllm-vllm-inference.${CLUSTER_DOMAIN}/v1/chat/completions \
 | `HF_TOKEN` | — | Hugging Face read token |
 
 ### vLLM server parameters (`k8s/deployment.yaml`)
+
+Here is the main point where you play with your model setup, performance tweeks and capabilities. Initially only a minimal number of settings is done.
 
 | Parameter | Value | Purpose |
 |---|---|---|
@@ -174,11 +176,12 @@ The RHAIIS image runs as root (UID 0). `serviceaccount.yaml` grants the `anyuid`
 
 ### Service link collision
 
-OpenShift injects `<SERVICE>_PORT=tcp://...` env vars into all pods in the namespace. Because the Service is named `vllm`, this produces `VLLM_PORT=tcp://...`, which conflicts with vLLM's own `VLLM_PORT` integer variable. The deployment sets `enableServiceLinks: false` to suppress all such injections.
+OpenShift injects `<SERVICE>_PORT=tcp://...` env vars into all pods in the namespace. Because the Service is named `vllm`, this produces `VLLM_PORT=tcp://...`, which conflicts with vLLM's own `VLLM_PORT` integer variable. The deployment sets `enableServiceLinks: false` to suppress all such injections. Other solution would be to rename service to any other than `vllm`.
 
 ### RHAIIS vs community image
 
-The community `vllm/vllm-openai` image embeds an `NVIDIA_REQUIRE_CUDA` constraint that caps driver compatibility at 570.x. The RHAIIS image (`vllm-cuda-rhel9:3`) removes this constraint and is compatible with driver 580.x and later.
+The community `vllm/vllm-openai` image embeds an `NVIDIA_REQUIRE_CUDA` constraint that caps driver compatibility at 570.x. The RHAIIS image (`vllm-cuda-rhel9:3`) removes this constraint and is compatible with driver 580.x (actual in time of development) and later.
+I'ts a hard learning to run vanila `vllm/vllm-openai` due to CUDA versions missmatch, needs lots of testing and failures before finally gets done.
 
 ### Recreate strategy
 
