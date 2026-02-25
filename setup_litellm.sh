@@ -23,7 +23,7 @@ VLLM_URL="${VLLM_URL:-https://vllm-vllm-claude.apps.zenek.sandbox2706.opentlc.co
 # LiteLLM admin password is used to obtain a master key via the UI login flow.
 # The default UI login is admin / <MASTER_KEY>.
 # If you already know your master key (starts with sk-), set it directly:
-LITELLM_ADMIN_KEY="${LITELLM_ADMIN_KEY:-sk-n0fpy0a2zXS2PIsIIO7kpzPN6vexD4xbWnjMUT/kcVk=}"   # e.g. sk-1234 if already known
+LITELLM_ADMIN_KEY="${LITELLM_ADMIN_KEY:-sk-n0fpy0a2zXS2PIsIIO7kpzPN6vexD4xbWnjMUT/kcVk=}"   # not important, temporaty key
 LITELLM_ADMIN_USER="${LITELLM_ADMIN_USER:-admin}"
 LITELLM_ADMIN_PASS="${LITELLM_ADMIN_PASS:-admin}"
 
