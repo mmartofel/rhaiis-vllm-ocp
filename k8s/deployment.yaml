@@ -113,10 +113,13 @@ spec:
             - --max-num-seqs
             - "128"
             - --max-model-len
-            - "4096"
+            - "32768"                   # Recommended by Anthropific bound to max_position_embeddings=32768 or model_max_length=None in model's config.json
             - --gpu-memory-utilization
             - "0.9"
             - --enforce-eager
+            - --enable-auto-tool-choice
+            - --tool-call-parser
+            - hermes
             # --trust-remote-code is a boolean flag (store_true); omitting it means false (the default).
           env:
             - name: HUGGING_FACE_HUB_TOKEN
