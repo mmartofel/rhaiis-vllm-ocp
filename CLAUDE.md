@@ -4,31 +4,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This repository contains a minimal vLLM inference server setup. The single script `docker.sh` launches a vLLM OpenAI-compatible server via Docker with a locally mounted model.
+This repository deploys a vLLM OpenAI-compatible inference server on Red Hat OpenShift using the **Red Hat AI Inference Server (RHAIIS)** image. The primary entry point is `deploy.sh`, which renders Kubernetes manifests from `user-values.env` and applies them with `oc`.
 
-## Running the Server
+## Deployment
 
 ```bash
-bash docker.sh
+cp user-values.env.example user-values.env   # fill in your values
+bash deploy.sh
 ```
 
-This starts a vLLM server on port `8000` using the model at `/models/Qwen2.5-7B-Instruct-AWQ` (mounted from the host's `/models` directory).
+## Key design: single-container with lazy model download
 
-## Key Configuration
+The `k8s/deployment.yaml` uses a **single container** with a shell wrapper entrypoint. On startup the wrapper:
 
-All server parameters are in `docker.sh`:
+1. Checks whether `${MODEL_PATH}/config.json` already exists on the PVC
+2. If missing, runs `huggingface-cli download` to fetch the model (download is resumable)
+3. `exec`s into `python -m vllm.entrypoints.openai.api_server` so Python becomes PID 1 and receives SIGTERM correctly
+
+The model is downloaded once and persisted on the PVC (`vllm-models-cache`). Subsequent pod restarts skip the download entirely.
+
+## Key vLLM server parameters (`k8s/deployment.yaml`)
 
 | Parameter | Value | Purpose |
 |---|---|---|
-| `--model` | `/models/Qwen2.5-7B-Instruct-AWQ` | AWQ-quantized model path inside container |
 | `--tensor-parallel-size` | `1` | Single GPU inference |
 | `--max-num-seqs` | `128` | Max concurrent sequences |
 | `--max-model-len` | `4096` | Max context length |
 | `--gpu-memory-utilization` | `0.9` | 90% VRAM allocation |
 | `--enforce-eager` | — | Disables CUDA graph capture (slower but less memory) |
 
-The host `/models` directory is bind-mounted to `/models` inside the container. To use a different model, update the `--model` path in `docker.sh`.
-
 ## API
 
-Once running, the server exposes an OpenAI-compatible API at `http://localhost:8000`. Standard endpoints like `/v1/chat/completions` and `/v1/completions` are available.
+Once the pod is Ready, the server exposes an OpenAI-compatible API via the OpenShift Route. Standard endpoints like `/v1/chat/completions`, `/v1/completions`, and `/v1/models` are available.

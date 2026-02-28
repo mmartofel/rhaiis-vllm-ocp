@@ -24,14 +24,6 @@ spec:
       securityContext:
         runAsUser: 0
 
-      # Using the RHAIIS image which does not carry the restrictive
-      # NVIDIA_REQUIRE_CUDA baked-in constraint that tops out at driver 570.x.
-      # The community vllm/vllm-openai image's constraint caused
-      # NVIDIA_VISIBLE_DEVICES=void on driver 580.x regardless of pod-spec
-      # overrides (the OCI hook reads it directly from the image config).
-      # RHAIIS image is compatible with driver 580.x so standard nvidia
-      # runtimeClassName works correctly.
-
       # Kubernetes injects <SERVICE_NAME>_PORT=tcp://... env vars for every
       # Service in the namespace. Because the Service is named "vllm", this
       # produces VLLM_PORT=tcp://..., which collides with vLLM's own VLLM_PORT
@@ -45,32 +37,37 @@ spec:
           operator: "Exists"
           effect: "NoSchedule"
 
-      # ----------------------------------------------------------------
-      # Init container: download the model from Hugging Face Hub.
-      # Uses the same image as the server (already pulled) so no extra
-      # image pull is needed. The download is idempotent — if config.json
-      # already exists the container exits immediately.
-      # ----------------------------------------------------------------
-      initContainers:
-        - name: model-downloader
+      containers:
+        - name: server
           image: ${RHIIS_IMAGE}
+          # Shell wrapper: download model on first start, skip on subsequent starts,
+          # then exec into the vLLM server. exec replaces the shell so the Python
+          # process receives SIGTERM directly for graceful shutdown.
           command:
             - /bin/sh
             - -c
             - |
               set -e
               MODEL_DIR=${MODEL_PATH}
-              if [ -f "${MODEL_DIR}/config.json" ]; then
+              if [ ! -f "${MODEL_DIR}/config.json" ]; then
+                echo "Downloading ${MODEL_ID} from Hugging Face Hub..."
+                huggingface-cli download ${MODEL_ID} \
+                  --local-dir "${MODEL_DIR}" \
+                  --local-dir-use-symlinks False
+                echo "Download complete."
+              else
                 echo "Model already present at ${MODEL_DIR}, skipping download."
-                ls -alh ${MODEL_DIR}
-                exit 0
               fi
-              echo "Downloading ${MODEL_ID} from Hugging Face Hub..."
-              huggingface-cli download ${MODEL_ID} \
-                --local-dir "${MODEL_DIR}" \
-                --local-dir-use-symlinks False
-              echo "Download complete."
-              ls -alh ${MODEL_DIR}
+              exec python -m vllm.entrypoints.openai.api_server \
+                --model "${MODEL_DIR}" \
+                --served-model-name "${MODEL_ID}" \
+                --dtype auto \
+                --tensor-parallel-size 1 \
+                --max-num-seqs 128 \
+                --max-model-len 4096 \
+                --gpu-memory-utilization 0.9 \
+                --enforce-eager \
+                --port 8000
           env:
             - name: HUGGING_FACE_HUB_TOKEN
               valueFrom:
@@ -81,49 +78,6 @@ spec:
               value: ${HF_DIR}/.hf-cache
             - name: HF_HUB_OFFLINE
               value: "0"
-          volumeMounts:
-            - name: models-cache
-              mountPath: ${HF_DIR}
-          resources:
-            requests:
-              cpu: "2"
-              memory: "2Gi"
-            limits:
-              cpu: "4"
-              memory: "4Gi"
-
-      # ----------------------------------------------------------------
-      # Main container: vLLM OpenAI-compatible server.
-      # Args mirror the configuration in docker.sh.
-      # ----------------------------------------------------------------
-      containers:
-        - name: server
-          image: ${RHIIS_IMAGE}
-          # RHAIIS image uses python -m entrypoint rather than the `vllm serve` CLI.
-          command: ["python", "-m", "vllm.entrypoints.openai.api_server"]
-          args:
-            - --model
-            - ${MODEL_PATH}
-            - --served-model-name
-            - ${MODEL_ID}
-            - --dtype
-            - auto
-            - --tensor-parallel-size
-            - "1"
-            - --max-num-seqs
-            - "128"
-            - --max-model-len
-            - "4096"
-            - --gpu-memory-utilization
-            - "0.9"
-            - --enforce-eager
-            # --trust-remote-code is a boolean flag (store_true); omitting it means false (the default).
-          env:
-            - name: HUGGING_FACE_HUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: hf-token-secret
-                  key: token
             - name: NVIDIA_DRIVER_CAPABILITIES
               value: "compute,utility"
           ports:
@@ -144,8 +98,8 @@ spec:
             # Shared memory for PyTorch tensor operations across workers.
             - name: shm
               mountPath: /dev/shm
-          # startupProbe allows up to 12 minutes (24 × 30s) for the model
-          # to load before liveness/readiness checks begin.
+          # startupProbe allows up to 12 minutes (24 × 30s) for download +
+          # model load before liveness/readiness checks begin.
           startupProbe:
             httpGet:
               path: /health

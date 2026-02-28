@@ -10,16 +10,14 @@ Deploy a vLLM OpenAI-compatible inference server on Red Hat OpenShift using the 
 ┌──────────────────────────────────────────────────────────┐
 │  Pod (vllm)                                              │
 │                                                          │
-│  ┌─────────────────────────┐                             │
-│  │ init: model-downloader  │──► huggingface-cli download │
-│  │  runs once; skips if    │         HuggingFace Hub     │
-│  │  config.json present    │                             │
-│  └───────────┬─────────────┘                             │
-│              │  PVC: vllm-models-cache (RWO)             │
-│  ┌───────────▼─────────────┐                             │
-│  │ server                  │  python -m vllm.entrypoints │
-│  │  vLLM API server        │  .openai.api_server         │
-│  └─────────────────────────┘                             │
+│  ┌───────────────────────────────────────────────────┐   │
+│  │ server                                            │   │
+│  │  1. config.json on PVC?                           │   │
+│  │       missing ──► huggingface-cli download ───────────►HuggingFace Hub
+│  │       present ──► skip                            │   │
+│  │  2. exec python -m vllm.entrypoints...            │   │
+│  └───────────────────────────────────────────────────┘   │
+│              PVC: vllm-models-cache (RWO)                │
 └──────────────────────────────────────────────────────────┘
           │ ClusterIP :8000
           ▼
@@ -28,9 +26,8 @@ Deploy a vLLM OpenAI-compatible inference server on Red Hat OpenShift using the 
 
 | Component | Purpose |
 |---|---|
-| **init container** | Downloads the model into the PVC on first boot; idempotent |
-| **server container** | Runs the vLLM OpenAI-compatible API; reads model from PVC |
-| **PVC** `vllm-models-cache` | `ReadWriteOnce` persistent volume shared by both containers |
+| **server container** | Shell wrapper: downloads model on first start (persists to PVC), then exec's vLLM |
+| **PVC** `vllm-models-cache` | `ReadWriteOnce` persistent volume; model downloaded once and reused across restarts |
 | **Route** | OpenShift edge-TLS route; hostname auto-assigned from cluster wildcard domain |
 
 ---
@@ -86,15 +83,14 @@ bash deploy.sh
 ### 3. Watch startup
 
 ```bash
-# Init container — model download (first run only, ~5–10 min depending on bandwidth and model size)
-oc logs -f -l app=vllm -c model-downloader -n vllm-inference
-
-# Server — model load and vLLM startup (~2–3 min)
-oc logs -f deployment/vllm -c server -n vllm-inference
+# Server logs — shows download progress on first start, then vLLM startup
+oc logs -f deployment/vllm -n vllm-inference
 
 # Pod status
 oc get pods -n vllm-inference -w
 ```
+
+On first start the logs will show `Downloading <model> from Hugging Face Hub...` followed by vLLM startup (~5–15 min total depending on model size and bandwidth). On subsequent restarts: `Model already present … skipping download` and the server starts in seconds.
 
 ### 4. Test the API with simple chat request
 
@@ -158,7 +154,7 @@ Here is the main point where you play with your model setup, performance tweeks 
 │   ├── serviceaccount.yaml     # ServiceAccount + anyuid SCC Role/RoleBinding
 │   ├── secret-hf-token.yaml    # Documentation only (secret created by deploy.sh)
 │   ├── pvc-models.yaml         # PVC for model weights + HF cache
-│   ├── deployment.yaml         # Init container (download) + server (vLLM)
+│   ├── deployment.yaml         # Single container: shell wrapper downloads model once, then exec's vLLM
 │   ├── service.yaml            # ClusterIP Service on port 8000
 │   ├── route.yaml              # OpenShift edge-TLS Route
 │   └── kustomization.yaml      # Resource listing (reference; deploy.sh is primary)
@@ -172,7 +168,7 @@ Here is the main point where you play with your model setup, performance tweeks 
 
 ### anyuid SCC
 
-The RHAIIS image runs as root (UID 0). `serviceaccount.yaml` grants the `anyuid` SCC to `vllm-sa` via a Role/RoleBinding. The pod spec sets `securityContext.runAsUser: 0` at the pod level so both the init container and the server container can write to the PVC mount point.
+The RHAIIS image runs as root (UID 0). `serviceaccount.yaml` grants the `anyuid` SCC to `vllm-sa` via a Role/RoleBinding. The pod spec sets `securityContext.runAsUser: 0` so the container can write to the PVC mount point during download.
 
 ### Service link collision
 
@@ -220,13 +216,13 @@ oc delete pod cuda-probe -n vllm-inference
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Init container: `Permission denied` on `/models-cache` | PVC root owned by `root:root 755`, container not running as root | Ensure `securityContext.runAsUser: 0` at pod level in `deployment.yaml` |
-| Init container: `offline mode is enabled` | `HF_HUB_OFFLINE=1` baked into the RHAIIS image | Set `HF_HUB_OFFLINE: "0"` in init container env |
-| Init container downloads metadata only (no `.safetensors` shards) | Download interrupted or offline mode active | Re-run with online mode; `huggingface-cli download` resumes partial downloads |
+| `Permission denied` on `/models-cache` | PVC root owned by `root:root 755`, container not running as root | Ensure `securityContext.runAsUser: 0` at pod level in `deployment.yaml` |
+| `offline mode is enabled` during download | `HF_HUB_OFFLINE=1` baked into the RHAIIS image | Ensure `HF_HUB_OFFLINE: "0"` is set in container env |
+| Download incomplete (metadata only, no `.safetensors` shards) | Download interrupted or offline mode active | Restart the pod; `huggingface-cli download` resumes partial downloads automatically |
 | Server crashes: `VLLM_PORT` parse error | Service link env var collision | Set `enableServiceLinks: false` in pod spec |
 | GPU not visible / `NVIDIA_REQUIRE_CUDA` error | Community image driver constraint | Use RHAIIS image (`registry.redhat.io/rhaiis/vllm-cuda-rhel9:3`) |
 | `/v1/models` returns a local path | `--served-model-name` not set | Add `--served-model-name ${MODEL_ID}` to server args |
-| Pod stuck in `0/1 Running` (not Ready) | Model still loading | Startup probe allows up to 12 min; check server logs |
+| Pod stuck in `0/1 Running` (not Ready) | Model downloading or still loading | Startup probe allows up to 12 min; check server logs |
 | Route returns 503 | Pod not yet Ready | Wait for `oc rollout status deployment/vllm -n vllm-inference` |
 
 ### Re-download the model
@@ -236,6 +232,6 @@ oc delete pod cuda-probe -n vllm-inference
 oc exec deployment/vllm -c server -n vllm-inference -- \
   rm -rf /models-cache/Qwen /models-cache/.hf-cache
 
-# Restart to trigger the init container again
+# Restart — the shell wrapper will detect missing config.json and re-download
 oc rollout restart deployment/vllm -n vllm-inference
 ```
