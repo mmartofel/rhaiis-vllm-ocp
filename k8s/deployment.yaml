@@ -5,6 +5,10 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     app: vllm
+    app.kubernetes.io/component: vllm
+    app.kubernetes.io/name: vllm
+    app.kubernetes.io/part-of: VLLM_SUBSYSTEM
+    app.openshift.io/runtime: golang
 spec:
   replicas: 1
   # Recreate is required because the PVC is ReadWriteOnce — only one pod
@@ -132,10 +136,10 @@ spec:
               protocol: TCP
           resources:
             requests:
-              cpu: "2"
-              memory: "6Gi"
+              cpu: "0.5"
+              memory: "2Gi"
             limits:
-              cpu: "4"
+              cpu: "2"
               memory: "8Gi"
               nvidia.com/gpu: "1"
           volumeMounts:
@@ -160,16 +164,16 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 15
-            failureThreshold: 3
-            timeoutSeconds: 5
+            failureThreshold: 10
+            timeoutSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 30
-            failureThreshold: 3
-            timeoutSeconds: 5
+            failureThreshold: 10
+            timeoutSeconds: 10
 
       volumes:
         - name: models-cache
