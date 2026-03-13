@@ -27,7 +27,6 @@ spec:
       serviceAccountName: vllm-sa
       securityContext:
         runAsUser: 0
-
       # Using the RHAIIS image which does not carry the restrictive
       # NVIDIA_REQUIRE_CUDA baked-in constraint that tops out at driver 570.x.
       # The community vllm/vllm-openai image's constraint caused
@@ -48,7 +47,6 @@ spec:
         - key: "nvidia.com/gpu"
           operator: "Exists"
           effect: "NoSchedule"
-
       # ----------------------------------------------------------------
       # Init container: download the model from Hugging Face Hub.
       # Uses the same image as the server (already pulled) so no extra
@@ -93,9 +91,8 @@ spec:
               cpu: "2"
               memory: "2Gi"
             limits:
-              cpu: "4"
-              memory: "4Gi"
-
+              cpu: "3"
+              memory: "3Gi"
       # ----------------------------------------------------------------
       # Main container: vLLM OpenAI-compatible server.
       # Args mirror the configuration in docker.sh.
@@ -174,7 +171,6 @@ spec:
             periodSeconds: 30
             failureThreshold: 10
             timeoutSeconds: 10
-
       volumes:
         - name: models-cache
           persistentVolumeClaim:
